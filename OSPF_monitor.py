@@ -1,12 +1,12 @@
 from operator import attrgetter
-from ryu.app import OSPF
+from ryu.app import OSPF_switch
 from ryu.controller import ofp_event
-from ryu.controller.handler import DEAD_DISPATCHER
+from ryu.controller.handler import MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib import hub
 
 
-class s_monitor(OSPF.ospf_switch):
+class s_monitor(OSPF_switch.ospf_switch):
 
     def __init__(self, *args, **kwargs):
         super(s_monitor, self).__init__(*args, **kwargs)
@@ -39,22 +39,22 @@ class s_monitor(OSPF.ospf_switch):
 
         req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
-        req = parser.OFPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
+        req = parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
         datapath.send_msg(req)
 
-    @set_ev_cls(ofp_event.EventOFPFlowsStatsReply, MAIN_DISPATCHER)
+    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
         body = ev.msg.body
 
         self.logger.info('datapath'
-                         'in-port  eth-dst'
-                         'out-port  packets bytes')
-        self.logger.info('________________'
-                         '________  _________________'
-                         '_________ _________ _________')
+                         '           in-port  eth-dst'
+                         '           out-port  packets bytes')
+        self.logger.info('_________________'
+                         '    _____ _________________'
+                         '    _____   _______ ______')
         for stat in sorted([flow for flow in body if flow.priority == 1],
                            key=lambda flow: (flow.match['in_port'],
-                                             flow.mathc['eth_dst'])):
+                                             flow.match['eth_dst'])):
             self.logger.info(' %016x %8x %17s %8x %8d %8d', ev.msg.datapath.id,
                              stat.match['in_port'], stat.match['eth_dst'],
                              stat.instructions[0].actions[0].port,
@@ -63,12 +63,12 @@ class s_monitor(OSPF.ospf_switch):
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):
         body = ev.msg.body
-        self.logger.info('datapath  port '
-                         'rx-pkts  rx-bytes  rx-error'
-                         'tx-pkts  tx-bytes  tx-error')
-        self.logger.info('_________________  _________________'
-                         '________  ________  ___________'
-                         '________  ________  _____________')
+        self.logger.info('datapath         port'
+                         '        rx-pkts  rx-bytes  rx-error'
+                         ' tx-pkts tx-bytes  tx-error')
+        self.logger.info('________________ ________'
+                         '   ______    _____     ______'
+                         '   ______  ________   ______')
         for stat in sorted(body, key=attrgetter('port_no')):
             self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
                              ev.msg.datapath.id, stat.port_no, stat.rx_packets,
