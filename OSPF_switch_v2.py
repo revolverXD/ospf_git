@@ -1,3 +1,5 @@
+import logging
+import struct
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER
@@ -8,6 +10,7 @@ from ryu.lib.packet import ethernet
 from ryu.topology import event, switches
 from ryu.topology.api import get_switch, get_link
 import networkx as nx
+from ryu.lib.mac import haddr_to_bin
 
 
 class ospf_switch(app_manager.RyuApp):
@@ -33,21 +36,29 @@ class ospf_switch(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
 
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
+    #def add_flow(self, datapath, priority, match, actions, buffer_id=None):
+    def add_flow(self, datapath, in_port, dst, actions):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
+        match = datapath.ofproto_parser.OFPMatch(in_port=in_port,
+                                                 dl_dst=haddr_to_bin(dst))
 
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
-                                             actions)]
-        if buffer_id:
-            mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
-                                    priority=priority, match=match,
-                                    instructions=inst)
+        #inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
+        #                                     actions)]
+        #if buffer_id:
+        #    mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
+        #                            priority=priority, match=match,
+        #                            instructions=inst)
             #self.logger.info("The mod is $s", mod)
-        else:
-            mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                    match=match, instructions=inst)
+        #else:
+        #    mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
+        #                            match=match, instructions=inst)
             #self.logger.info("The mod is $r", mod)
+        mod = datapath.ofproto_parser.OFPFlowMod(
+            datapath=datapath,match=match, cookie=0,
+            command=ofproto.OFPFC_ADD,idle_timeout=0, hard_timeout=0,
+            priority=ofproto.OFP_DEFAULT_PRIORITY,
+            flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions)
         datapath.send_msg(mod)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -81,29 +92,37 @@ class ospf_switch(app_manager.RyuApp):
             out_port = ofproto.OFPP_FLOOD
             #self.logger.info("output port is %s", out_port)
         actions = [parser.OFPActionOutput(out_port)]
+        if src not in self.net:
+            self.net.add_node(src)
+            self.net.add_edge(dpid,src,{'port':msg.in_port})
+            self.net.add_edge(src, dpid)
+        if dst in self.net:
+            path = nx.shortest_path(self.net,src,dst)
+            next = path[path.index(dpid)+1]
+            out_port = self.net[dpid][next]['port']
+        else:
+            out_port = ofproto.OFPP_FLOOD
+
+        actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
+
         if out_port != ofproto.OFPP_FLOOD:
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
-            if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self.add_flow(datapath, 1, match, actions)
-                return
-            else:
-                self.add_flow(datapath, 1, match, actions)
-        self.logger.info("mac_to_port %s", self.mac_to_port)
+            self.add_flow(datapath, msg.in_port, dst, actions)
 
-        data = None
-        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-            data = msg.data
-            #self.logger.info("The data is %s", data)
-
-        out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                  in_port=in_port, actions=actions, data=data)
-        #self.logger.info("The message is %s", out)
+        out = datapath.ofproto_parser.OFPPacketOut(datapath=datapath,
+                                                   buffer_id=msg.buffer_id,
+                                                   in_port=msg.in_port,
+                                                   actions=actions)
         datapath.send_msg(out)
 
-#    @set_ev_cls(event.EventSwitchEnter)
-#    def get_topology_data(self, ev):
-#        switch_list = get_switch(self.topology_api_app, None)
-#        switches = [switch.dp.id for switch in switch_list]
-#        link_list = get_link(self.topology_api_app, None)
-#        links=[(link.src.dpid,link.dst.dpid,
-#                {'port':link.src.port_no}) for link in links_list]
+    @set_ev_cls(event.EventSwitchEnter)
+    def get_topology_data(self, ev):
+        switch_list = get_switch(self.topology_api_app, None)
+        switches = [switch.dp.id for switch in switch_list]
+        self.net.add_nodes_from(switches)
+        links_list = get_link(self.topology_api_app, None)
+        links=[(link.src.dpid,link.dst.dpid, {'port': link.src.port_no}) for link in links_list]
+        self.net.add_edges_from(links)
+        links=[(link.dst.dpid,list.src.dpid, {'port': link.dst.port_no}) for link in links_list]
+        self.net.add_edges_from(links)
+        print "*********List of links"
+        print self.net.edges()
