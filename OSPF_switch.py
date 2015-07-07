@@ -83,11 +83,3 @@ class ospf_switch(app_manager.RyuApp):
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
-
-    @set_ev_cls(event.EventSwitchEnter)
-    def get_topology_data(self, ev):
-        switch_list = get_switch(self.topology_api_app, None)
-        switches = [switch.dp.id for switch in switch_list]
-        link_list = get_link(self.topology_api_app, None)
-        links=[(link.src.dpid,link.dst.dpid,
-                {'port':link.src.port_no}) for link in links_list]
