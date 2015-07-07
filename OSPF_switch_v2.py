@@ -1,3 +1,5 @@
+import logging
+import struct
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER, CONFIG_DISPATCHER
@@ -7,6 +9,9 @@ from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.topology import event, switches
 from ryu.topology.api import get_switch, get_link
+from ryu.app.wsgi import ControllerBase
+import networkx as nx
+from ryu.lib.mac import haddr_to_bin
 
 
 class ospf_switch(app_manager.RyuApp):
@@ -15,13 +20,19 @@ class ospf_switch(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super(ospf_switch, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
+        self.topology_api_app = self
+        self.net = nx.DiGraph()
+        self.nodes = {}
+        self.links = {}
+        self.no_of_nodes = 0
+        self.no_of_links = 0
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        match = parser.OFPMatch()
+        match = parser.OFPMatch(in_port=in_port,dl_dst=haddr_to_bin(dst))
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
@@ -63,8 +74,14 @@ class ospf_switch(app_manager.RyuApp):
         self.logger.info('packet in %s %s %s %s', dpid, src, dst, in_port)
         self.mac_to_port[dpid][src] = in_port
 
-        if dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][dst]
+        if src not in self.net:
+            self.net.add_node(src)
+            self.net.add_edfe(dpid,src,{'port':msg.in_port})
+            self.net.add_edge(src,dpid)
+        if dst in self.net:
+            path = nx.shortest_path(self.net, src, dst)
+            next = path[path.index(dpid)+1]
+            out_port = self.net[dpid][next]['port']
         else:
             out_port = ofproto.OFPP_FLOOD
         actions = [parser.OFPActionOutput(out_port)]
@@ -89,5 +106,9 @@ class ospf_switch(app_manager.RyuApp):
         switch_list = get_switch(self.topology_api_app, None)
         switches = [switch.dp.id for switch in switch_list]
         link_list = get_link(self.topology_api_app, None)
+        self.net.add_nodes_from(switches)
         links=[(link.src.dpid,link.dst.dpid,
                 {'port':link.src.port_no}) for link in links_list]
+        self.ned_add_edges_from(links)
+        self.logger.info('******************************** List of links')
+        self.logger.info(self.net.edges())
